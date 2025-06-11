@@ -1,0 +1,296 @@
+
+const jwt = require('jsonwebtoken');
+const APIKey = require('../models/APIKey');
+
+class IdentityService {
+  // 生成API密钥
+  async generateAPIKey(platformType, platformId) {
+    const apiKey = jwt.sign(
+      { platformId, platformType },
+      process.env.JWT_SECRET,
+      { expiresIn: '365d' }
+    );
+    
+    await APIKey.create({ 
+      platformId, 
+      platformType, 
+      apiKey,
+      isActive: true
+    });
+    
+    return apiKey;
+  }
+
+  // 验证API密钥
+  async verifyAPIKey(apiKey) {
+    try {
+      const decoded = jwt.verify(apiKey, process.env.JWT_SECRET);
+      const validKey = await APIKey.findOne({ 
+        apiKey,
+        platformId: decoded.platformId,
+        isActive: true
+      });
+      
+      return validKey ? decoded : null;
+    } catch (error) {
+      return null;
+    }
+  }
+}
+
+module.exports = new IdentityService();
+
+809067011: 06-11 17:40:08
+graph LR
+A[电商平台] -->|API调用| B[支付网关]
+C[加密货币交易所] -->|API对接| B
+D[区块链网络] -->|交易监听| B
+B -->|支付通知| A
+B -->|资金清算| C
+
+809067011: 06-11 17:40:20
+├── README.md
+├── config
+│   ├── index.js          # 配置文件
+├── controllers
+│   ├── authController.js # 身份验证
+│   ├── paymentController.js # 支付处理
+│   ├── exchangeController.js # 交易所对接
+├── services
+│   ├── blockchainService.js # 区块链交互
+│   ├── exchangeService.js # 交易所服务
+│   ├── identityService.js # 身份验证服务
+├── routes
+│   ├── api
+│   │   ├── auth.js       # 认证路由
+│   │   ├── payments.js   # 支付路由
+│   │   ├── exchange.js   # 交易所路由
+├── models
+│   ├── User.js           # 用户模型
+│   ├── Transaction.js    # 交易模型
+├── utils
+│   ├── blockchainUtils.js # 区块链工具
+│   ├── exchangeAdapters.js # 交易所适配器
+├── .env                  # 环境变量
+└── app.js                # 主入口文件
+
+809067011: 06-11 17:41:18
+const Web3 = require('web3');
+const { BTC_NODE, ETH_NODE, SOL_NODE } = process.env;
+
+class BlockchainService {
+  constructor() {
+    this.chains = {
+      ETH: new Web3(ETH_NODE),
+      BTC: new BitcoinJS(BTC_NODE),
+      SOL: new SolanaWeb3(SOL_NODE)
+    };
+  }
+  
+  // 生成支付地址
+  async generatePaymentAddress(platformId, amount, currency) {
+    const chain = currency.toUpperCase();
+    const paymentId = uuidv4();
+    
+    // 生成唯一地址（使用HD钱包）
+    const address = this.chains[chain].generateAddress(paymentId);
+    
+    // 保存交易记录
+    await Transaction.create({
+      paymentId,
+      platformId,
+      currency,
+      amount,
+      address,
+      status: 'pending'
+    });
+    
+    return { paymentId, address };
+  }
+  
+  // 验证交易
+  async verifyTransaction(txHash, amount, currency) {
+    const chain = currency.toUpperCase();
+    const tx = await this.chains[chain].getTransaction(txHash);
+    
+    return (
+      tx.confirmations > 2 && 
+      tx.amount >= amount &&
+      tx.status === 'confirmed'
+    );
+  }
+}
+
+module.exports = new BlockchainService();
+
+809067011: 06-11 17:41:05
+const ExchangeAdapter = require('../utils/exchangeAdapters');
+
+class ExchangeService {
+  // 交易所对接
+  async connectExchange(apiKey, exchangeName, credentials) {
+    const identity = await IdentityService.verifyAPIKey(apiKey);
+    if (!identity || identity.platformType !== 'exchange') {
+      throw new Error('Unauthorized');
+    }
+    
+    // 使用适配器模式连接不同交易所
+    const adapter = ExchangeAdapter.getAdapter(exchangeName);
+    const client = adapter.connect(credentials);
+    
+    // 验证连接
+    const isValid = await client.validateConnection();
+    if (!isValid) throw new Error('Invalid exchange credentials');
+    
+    // 保存连接配置
+    await ExchangeConnection.create({
+      platformId: identity.platformId,
+      exchange: exchangeName,
+      credentials: encrypt(credentials) // 加密存储
+    });
+    
+    return { status: 'connected' };
+  }
+  
+  // 加密货币兑换法币
+  async convertToFiat(crypto, amount, platformId) {
+    const connection = await ExchangeConnection.findOne({ platformId });
+    if (!connection) throw new Error('Exchange not connected');
+    
+    const adapter = ExchangeAdapter.getAdapter(connection.exchange);
+    const client = adapter.connect(decrypt(connection.credentials));
+    
+    // 创建卖单
+    const order = await client.createMarketOrder(
+      `${crypto}/USD`,
+      'sell',
+      amount
+    );
+    
+    // 返回清算结果
+    return {
+      orderId: order.id,
+      amount: order.executedAmount,
+      currency: 'USD',
+      fee: order.fee
+    };
+  }
+}
+
+module.exports = new ExchangeService();
+
+809067011: 06-11 17:40:51
+const IdentityService = require('../services/identityService');
+const BlockchainService = require('../services/blockchainService');
+
+class PaymentController {
+  // 创建支付订单
+  async createPayment(req, res) {
+    const { apiKey, amount, currency, callbackUrl } = req.body;
+    
+    // 验证身份
+    const identity = await IdentityService.verifyAPIKey(apiKey);
+    if (!identity) return res.status(401).json({ error: 'Invalid API key' });
+    
+    // 创建区块链支付地址
+    const paymentAddress = await BlockchainService.generatePaymentAddress(
+      identity.platformId,
+      amount,
+      currency
+    );
+    
+    // 返回支付信息
+    res.json({
+      paymentId: paymentAddress.paymentId,
+      cryptoAddress: paymentAddress.address,
+      amount,
+      currency,
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000) // 15分钟有效期
+    });
+  }
+  
+  // 处理支付回调（区块链监听）
+  async handleBlockchainPayment(paymentId, txHash) {
+    const transaction = await Transaction.findOne({ paymentId });
+    if (!transaction) return;
+    
+    // 验证交易
+    const verified = await BlockchainService.verifyTransaction(
+      txHash,
+      transaction.amount,
+      transaction.currency
+    );
+    
+    if (verified) {
+      // 更新交易状态
+      transaction.status = 'completed';
+      await transaction.save();
+      
+      // 通知电商平台
+      await axios.post(transaction.callbackUrl, {
+        paymentId,
+        status: 'completed',
+        txHash
+      });
+      
+      // 法币清算（如果需要）
+      if (transaction.settleToFiat) {
+        await ExchangeService.convertToFiat(
+          transaction.currency,
+          transaction.amount,
+          transaction.platformId
+        );
+      }
+    }
+  }
+}
+
+module.exports = new PaymentController();
+809067011: 06-11 17:43:33
+// 获取API密钥
+const apiKey = await fetch('/api/auth/register', {
+  method: 'POST',
+  body: JSON.stringify({
+    platformType: 'ecommerce',
+    platformId: 'amazon-store-123'
+  })
+});
+
+// 创建支付订单
+const paymentOrder = await fetch('/api/payments/create', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    apiKey,
+    amount: 99.99,
+    currency: 'ETH',
+    callbackUrl: 'https://my-store.com/payment-callback'
+  })
+});
+
+// 显示支付地址给用户
+showQRCode(paymentOrder.cryptoAddress);
+
+809067011: 06-11 17:43:52
+// 交易所连接支付网关
+const result = await fetch('/api/exchange/connect', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    apiKey: 'EXCHANGE_API_KEY',
+    exchangeName: 'binance',
+    credentials: {
+      apiKey: 'your-binance-api-key',
+      apiSecret: 'your-binance-secret'
+    }
+  })
+});
+
+
+JWT_SECRET=your_secure_jwt_secret
+BTC_NODE=https://btc-node.example.com
+ETH_NODE=https://mainnet.infura.io/v3/YOUR_PROJECT_ID
+SOL_NODE=https://api.mainnet-beta.solana.com
+
+# 数据库配置
+DB_URI=mongodb://localhost:27017/crypto-gateway
