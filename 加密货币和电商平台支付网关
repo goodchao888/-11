@@ -40,7 +40,6 @@ class IdentityService {
 
 module.exports = new IdentityService();
 
-809067011: 06-11 17:40:08
 graph LR
 A[电商平台] -->|API调用| B[支付网关]
 C[加密货币交易所] -->|API对接| B
@@ -48,7 +47,6 @@ D[区块链网络] -->|交易监听| B
 B -->|支付通知| A
 B -->|资金清算| C
 
-809067011: 06-11 17:40:20
 ├── README.md
 ├── config
 │   ├── index.js          # 配置文件
@@ -74,7 +72,7 @@ B -->|资金清算| C
 ├── .env                  # 环境变量
 └── app.js                # 主入口文件
 
-809067011: 06-11 17:41:18
+
 const Web3 = require('web3');
 const { BTC_NODE, ETH_NODE, SOL_NODE } = process.env;
 
